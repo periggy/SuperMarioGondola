@@ -1,0 +1,189 @@
+'''
+
+GPIOControl
+
+Created by Philip Ignatoff
+Last updated 12/14/2022
+
+This class configures all of the GPIO pins needed for the functionality of the gondola
+and provides functions which can be used to control the GPIO pins in a user-friendly way. 
+
+'''
+
+
+import RPi.GPIO as GPIO
+import time
+
+class GpioControl:
+    
+    def __init__(self):   
+                
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BCM)
+
+        #setup for on off switch
+        #--------------------------------------------------------------------
+
+        #pin used to turn system on and off
+        self.onOffPin = 14
+        #condition to tell whether system is turned on or off
+        self.on = False
+        
+        GPIO.setup(self.onOffPin, GPIO.OUT)
+        GPIO.output(self.onOffPin, self.on)
+        
+
+        #setup for stepper
+        #--------------------------------------------------------------------
+        #pins that control stepper motor
+        self.a1 = 25
+        self.a2 = 8
+        self.b1 = 7
+        self.b2 = 12
+        #condition to tell whether stepper is spinning forward or backwards
+        self.forward = True  
+
+        GPIO.setup(self.a1, GPIO.OUT)
+        GPIO.setup(self.a2, GPIO.OUT)
+        GPIO.setup(self.b1, GPIO.OUT)
+        GPIO.setup(self.b2, GPIO.OUT)
+
+        GPIO.output(self.a1,GPIO.HIGH)
+        GPIO.output(self.b1,GPIO.LOW)
+        GPIO.output(self.a2, GPIO.LOW)
+        GPIO.output(self.b2,GPIO.HIGH)
+
+        #used in loop for accessing the pins in a cyclical way
+        self.stepperPins = [self.a1, self.b1, self.a2, self.b2]
+
+        self.curr = 0
+
+        
+        #setup for LEDs
+        #--------------------------------------------------------------------
+
+        #pins used to control LEDs
+        ledRedPins =   [2, 3, 4,   17]
+        ledGreenPins = [27, 22, 10, 9]
+        ledBluePins =  [11, 5,  6,  13]
+
+        #arrays used to control pwm duty cycles input into LEDs
+        self.ledRedPwmCtrl = []
+        self.ledGreenPwmCtrl = []
+        self.ledBluePwmCtrl = []
+
+        for pin in ledRedPins:
+            GPIO.setup(pin, GPIO.OUT)
+            self.ledRedPwmCtrl.append(GPIO.PWM(pin, 1000))
+
+        for pin in ledGreenPins:
+            GPIO.setup(pin, GPIO.OUT)
+            self.ledGreenPwmCtrl.append(GPIO.PWM(pin, 1000))
+
+        for pin in ledBluePins:
+            GPIO.setup(pin, GPIO.OUT)
+            self.ledBluePwmCtrl.append(GPIO.PWM(pin, 1000))
+
+        for pin in self.ledRedPwmCtrl:
+            pin.start(0)
+
+        for pin in self.ledGreenPwmCtrl:
+            pin.start(0)
+
+        for pin in self.ledBluePwmCtrl:
+            pin.start(0)
+
+
+        #setup for rocking boat
+        #--------------------------------------------------------------------
+
+        #pin controls boat's rocking motion
+        rockPin = 15
+        #variable to control pwm duty cycle for rocking motion
+        self.rockPwmCtrl = None
+
+        GPIO.setup(rockPin, GPIO.OUT)
+        self.rockPwmCtrl = GPIO.PWM(rockPin, 50)
+        self.rockPwmCtrl.start(0)
+
+        #setup for rowing 
+        #--------------------------------------------------------------------
+        
+        #pin controls luigi's rowing motion
+        rowPin = 18
+        #variable to control pwm duty cycle for rowing motion
+        self.rowPwmCtrl = None
+        
+        GPIO.setup(rowPin, GPIO.OUT)
+        self.rowPwmCtrl = GPIO.PWM(rowPin, 50)
+        self.rowPwmCtrl.start(0)
+
+
+    #turning entire system on or off  
+    def onOffSwitch(self):
+        self.resetLEDs()
+        self.on = not self.on
+        GPIO.output(self.onOffPin, self.on)
+
+
+    #returning state of on off switch
+    def onOffState(self):
+        return self.on
+
+
+    #spinning stepper motor
+    def spinStepper(self):
+        if (self.forward):
+            prev = (self.curr + 3) % 4 #(curr - 1 + 4) % 4
+            next = (self.curr + 1) % 4
+            GPIO.output(self.stepperPins[prev], GPIO.LOW)
+            GPIO.output(self.stepperPins[next], GPIO.HIGH)
+            self.curr = next
+            
+        else :
+            next = (self.curr + 3) % 4 #(curr - 1 + 4) % 4
+            prev = (self.curr + 1) % 4
+            GPIO.output(self.stepperPins[prev], GPIO.LOW)
+            GPIO.output(self.stepperPins[next], GPIO.HIGH)
+            self.curr = next
+
+
+    #reverses direction stepper motor is spinning
+    def reverseStepper(self):
+
+        self.forward = not self.forward
+
+        #reinitialize
+        GPIO.output(self.stepperPins[0],GPIO.HIGH)
+        GPIO.output(self.stepperPins[1],GPIO.LOW)
+        GPIO.output(self.stepperPins[2], GPIO.LOW)
+        GPIO.output(self.stepperPins[3],GPIO.HIGH)
+
+    
+    #moves servo motor used for rocking boat a desired angle
+    def moveRockServo(self, dc):
+        self.rockPwmCtrl.ChangeDutyCycle(dc)
+
+
+    #moves servo motor used for rowing to a desired angle
+    def moveRowServo(self, dc):        
+        self.rowPwmCtrl.ChangeDutyCycle(dc)
+
+
+    #changes the duty cycle of an LED pin
+    def changeLED(self, pin, dc):
+        pin.ChangeDutyCycle(dc)
+
+
+    #resets all LED PWM values to zero
+    def resetLEDs(self):
+         for pin in self.ledRedPwmCtrl:
+            self.changeLED(pin, 0)
+
+         for pin in self.ledGreenPwmCtrl:
+            self.changeLED(pin, 0)
+
+         for pin in self.ledBluePwmCtrl:
+            self.changeLED(pin, 0)
+
+

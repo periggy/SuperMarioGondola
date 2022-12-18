@@ -1,0 +1,377 @@
+'''
+GondolaControl class
+
+Written by Philip Ignatoff
+Last updated 12/14/2022
+
+Controls the GUI and threads to control the processes of the gondola. 
+'''
+
+#class provides user-friendly functionality for changing GPIO values
+import GPIOControl as GPIO
+
+#libraries used for creating GUI functionality and threading 
+import tkinter as tk
+from tkinter import ttk
+
+#library used to randomize light pattern
+import random
+
+#library used for adding background image of the GUI
+from PIL import Image, ImageTk
+
+
+class GondolaControl:
+
+    def __init__(self):
+
+        self.root = tk.Tk()
+        self.gpio = GPIO.GpioControl()
+
+        #Scaling GUI to take up the full screen
+        #--------------------------------------------------------------------------------------------------
+        self.root.attributes('-fullscreen', True)
+
+        #Adding background to GUI
+        #--------------------------------------------------------------------------------------------------
+        bg = Image.open("Mario.png")
+        bg = bg.resize((1824, 984), Image.ANTIALIAS)
+        bgLabel = tk.Label(self.root)
+        bgLabel.image = ImageTk.PhotoImage(bg)
+        bgLabel.config(image=bgLabel.image)
+        bgLabel.place(x=0, y=0, relwidth=1, relheight=1) 
+        
+        #Formatting GUI so widgets will be the proper size 
+        #--------------------------------------------------------------------------------------------------
+        for rows in range(6):
+            self.root.rowconfigure(rows, weight=1)
+        for columns in range(3):
+            self.root.columnconfigure(columns, weight=1)
+        
+        #on/off button
+        #used to turn system on and off
+        #--------------------------------------------------------------------------------------------------
+        self.onOffText = tk.StringVar()
+        self.onOffText.set("Turn On")
+        self.onoff_button = tk.Button(self.root, textvariable=self.onOffText, command=self.onOff)
+        self.onoff_button.grid(row = 0, column = 1, sticky='nsew')
+
+        #reverse stepper spin button
+        #used to reverse the spin of the stepper
+        #--------------------------------------------------------------------------------------------------
+        self.stepperFlip_button = tk.Button(self.root, text = 'Reverse Mario Spin', command=self.stepperFlip)
+        self.stepperFlip_button.grid(row=1, column=0, sticky='nsew')
+
+        #stepper speed button
+        #--------------------------------------------------------------------------------------------------
+        #button to increase the spin speed of the stepper
+        self.increaseStepperSpeed_button = tk.Button(self.root, text = 'Spin Mario Faster', command=self.increaseStepper)
+        self.increaseStepperSpeed_button.grid(row=2, column=0,  sticky='nsew')
+        
+        #button to decrease the spin speed of the stepper
+        self.slowStepperSpeed_button = tk.Button(self.root, text = 'Spin Mario Slower', command = self.decreaseStepper)
+        self.slowStepperSpeed_button.grid(row=3, column=0,  sticky='nsew')
+
+        self.speed = 10  #controls the speed of the stepper
+        self.spin = None #controls threading for stepper motor
+
+        #initializing LEDs
+        #--------------------------------------------------------------------------------------------------
+        self.RGBLEDs = [self.gpio.ledRedPwmCtrl, self.gpio.ledGreenPwmCtrl, self.gpio.ledBluePwmCtrl] #holds three arrays that each contain the object used for changing the PWM of the LED
+        self.LEDcurr = 0                                                                              #holds the current led that is being changed
+        self.colorCurr = 0                                                                            #holds the current color that is being changed
+        self.ledMode = 0                                                                              #holds the current mode we're using for flashing the LEDs
+        self.ledThread = None #controls threading for flashing the LEDs
+        
+        #LED mode button
+        #button allows user to switch between the modes used for flashing the LEDs
+        #--------------------------------------------------------------------------------------------------
+        self.changeLEDMode_button = tk.Button(self.root, text= 'Change Light Pattern', command=self.changeLEDMode)
+        self.changeLEDMode_button.grid(row=5, column=0, sticky='nsew')
+
+        #controlling row servo 
+        #--------------------------------------------------------------------------------------------------
+
+        self.rowForward = True       #stores whether servo is moving forward
+        self.rowDC = 6               #stores servo's current location
+        self.row = None              #controls threading for rowing
+
+        #controlling rowing button
+        #--------------------------------------------------------------------------------------------------
+        self.controlRowText = tk.StringVar()
+        self.controlRowText.set('Take Control of the Rowing')
+        self.controlBoat_button = tk.Button(self.root, textvariable= self.controlRowText, command = self.controlRow)
+        self.controlBoat_button.grid(row=4, column=2, sticky='nsew')
+        self.currentRowValue = tk.DoubleVar()
+
+        #controlling rowing slider
+        self.sliderRow = ttk.Scale(
+            self.root,
+            from_=6,
+            to=7,
+            orient='horizontal',
+            command = self.rowSliderChanged,
+            variable = self.currentRowValue
+        )
+        self.sliderRowOn = False   #stores whether rowing slider is visible
+
+        #controlling rock servo
+        #--------------------------------------------------------------------------------------------------
+
+        self.rockForward = True     #stores whether servo is moving forward
+        self.rockDC = 7.75             #stores servo's current location
+        self.rock = None            #controls threading for rocking
+
+        #controlling boat rocking button
+        #--------------------------------------------------------------------------------------------------
+        self.controlRockText = tk.StringVar()
+        self.controlRockText.set('Take Control of the Rocking')
+        self.controlBoat_button = tk.Button(self.root, textvariable= self.controlRockText, command = self.controlRock)
+        self.controlBoat_button.grid(row=2, column=2, sticky='nsew')
+        self.currentRockValue = tk.DoubleVar()
+        
+        #controlling rocking slider
+        self.sliderRock = ttk.Scale(
+            self.root,
+            from_=6.25,
+            to=7.75,
+            orient='horizontal',
+            command = self.rockSliderChanged,
+            variable = self.currentRockValue
+        )
+        self.sliderRockOn = False   #stores whether rocking slider is visible
+
+        
+        self.root.mainloop()
+
+    #turns system on or off
+    #called when on/off button is pressed
+    def onOff(self):
+        
+        self.gpio.onOffSwitch()  #turns physical switch (MOSFET) on/off 
+
+        #runs if system is currently off
+        if (  self.gpio.onOffState()  ):
+            self.onOffText.set('Turn Off')
+            self.spin = self.root.after(self.speed, self.moveStepper) #starts stepper spinning
+            self.row = self.root.after(25, self.updateRowAngle)      #starts row servo moving
+            self.rock = self.root.after(25, self.updateRockAngle)    #starts rock servo moving
+            self.ledThread = self.root.after(250, self.solidColorCycle)    #starts lights flashing
+
+        #runs if system is currently on
+        else:
+            self.root.after_cancel(self.spin)       #stops stepper spinning
+
+            self.sliderRow.grid_remove()
+            self.root.after_cancel(self.row)        #stops rowing
+            self.sliderRowOn = False
+
+            self.sliderRock.grid_remove()
+            self.root.after_cancel(self.rock)       #stops rocking
+            self.sliderRockOn = False
+
+            self.root.after_cancel(self.ledThread)  #stops lights flashing
+            
+            self.gpio.resetLEDs()
+            self.onOffText.set('Turn On')
+
+    #reversing spin direction of stepper motor
+    #called when reverse spin button is pressed
+    def stepperFlip(self):
+        if ( self.gpio.onOffState()  ):
+            self.gpio.reverseStepper()
+
+    #spins stepper
+    def moveStepper(self):
+        if (  self.gpio.onOffState()  ):
+
+            self.gpio.spinStepper()
+            self.spin = self.root.after(self.speed, self.moveStepper)
+
+    #increases speed of stepper
+    #called when Spin Mario Faster is called
+    def increaseStepper(self):
+        if (  self.gpio.onOffState()  ):
+
+
+            if (self.speed > 4 and self.speed <= 10):
+                self.speed -= 1
+            elif (self.speed > 10):
+                self.speed -= 10
+
+    #decreases speed of stepper
+    #called when Spin Mario Slower is called
+    def decreaseStepper(self):
+        if (  self.gpio.onOffState()  ):
+
+            if (self.speed < 10):
+                self.speed += 1
+            elif (self.speed < 20):
+                self.speed += 10
+                
+
+    #moves rocking servo
+    def updateRockAngle(self):
+        if (  self.gpio.onOffState()  ):
+
+            
+            if (self.rockDC == 6.25):
+                self.rockForward = True
+            elif (self.rockDC == 7.75):
+                self.rockForward = False
+
+            if (self.rockForward):
+                self.rockDC += .05
+            else:
+                self.rockDC -= .05
+
+            self.gpio.moveRockServo(self.rockDC)
+            self.rockDC = round(self.rockDC, 2)
+
+            self.rock = self.root.after(25, self.updateRockAngle)
+
+    #moves rowing servo
+    def updateRowAngle(self):
+        if (  self.gpio.onOffState()  ):
+
+            if (self.rowDC == 6):
+                self.rowForward = True
+            elif (self.rowDC == 7):
+                self.rowForward = False
+
+            if (self.rowForward):
+                self.rowDC += .1
+            else:
+                self.rowDC -= .1
+    
+            
+            self.rowDC = round(self.rowDC, 2)
+
+            self.gpio.moveRowServo(self.rowDC)
+            self.row = self.root.after(25, self.updateRowAngle)
+
+    #changes pattern lights are flashing
+    #called when change light pattern is called
+    def changeLEDMode(self):
+        if (  self.gpio.onOffState()  ):
+
+            self.root.after_cancel(self.ledThread)
+            
+            if (self.ledMode == 0):
+                self.ledThread = self.root.after(250, self.lightRandom)
+
+            elif (self.ledMode == 1):
+                self.ledThread = self.root.after(250, self.lightCycle)
+
+            elif (self.ledMode == 2):
+                self.ledThread = self.root.after(250, self.solidColorCycle)
+            
+            self.gpio.resetLEDs()
+            self.ledMode = (self.ledMode + 1) % 3
+
+
+    #flashes lights in a pattern where all of the LEDs cycle between red, green, and blue
+    def solidColorCycle(self):
+        if (  self.gpio.onOffState()  ):
+
+            self.gpio.resetLEDs()
+
+            self.gpio.changeLED(self.RGBLEDs[self.colorCurr][0], 100)
+            self.gpio.changeLED(self.RGBLEDs[self.colorCurr][1], 100)
+            
+
+            if (self.colorCurr != 0):
+                self.gpio.changeLED(self.RGBLEDs[self.colorCurr][2], 100)
+                self.gpio.changeLED(self.RGBLEDs[self.colorCurr][3], 100)
+                
+            self.colorCurr = (self.colorCurr + 1) % 3
+
+            self.ledThread = self.root.after(250, self.solidColorCycle)
+
+    #flashes lights in a pattern where one led is turned on at a time and colors are changed in a cyclical way
+    def lightCycle(self):
+        if (  self.gpio.onOffState()  ):
+
+            self.gpio.changeLED(self.RGBLEDs[self.colorCurr][self.LEDcurr], 0)
+            self.LEDcurr = (self.LEDcurr+ 1) % 4
+            self.colorCurr = (self.colorCurr + 1) % 3
+            self.gpio.changeLED(self.RGBLEDs[self.colorCurr][self.LEDcurr], 100)
+
+            self.ledThread = self.root.after(250, self.lightCycle)
+
+    #flashes in a pattern where LED and light color are randomly chosen
+    #one led is turned on at a time
+    def lightRandom(self):
+        if (  self.gpio.onOffState()  ):
+
+            self.gpio.changeLED(self.RGBLEDs[self.colorCurr][self.LEDcurr], 0)
+
+            self.LEDcurr = random.choice([0, 1, 2, 3])
+            self.colorCurr = random.choice([0,1,2])
+
+            self.gpio.changeLED(self.RGBLEDs[self.colorCurr][self.LEDcurr], 100)
+            
+            self.ledThread = self.root.after(250, self.lightRandom)
+
+    #displays or hides a slider where the user can control the rock of the boat
+    #called when take control of the rocking button is pressed
+    def controlRock(self):
+        if (  self.gpio.onOffState()  ):
+
+            if(self.sliderRockOn == True):
+                self.sliderRock.grid_remove()
+                self.rock = self.root.after(240, self.updateRockAngle)
+
+            else:
+                self.sliderRock.grid(row=3, column=2,  sticky='ew')
+                self.root.after_cancel(self.rock)
+
+            self.sliderRockOn = not self.sliderRockOn
+        
+    #displays or hides a slider where the user can control the rowing of the boat
+    #called when take control of the rowing button is pressed
+    def controlRow(self):
+        if (  self.gpio.onOffState()  ):
+
+            if(self.sliderRowOn == True):
+                self.sliderRow.grid_remove()
+                self.row = self.root.after(250, self.updateRowAngle)
+
+            else:
+                self.sliderRow.grid(row=5, column=2, sticky='we')
+                self.root.after_cancel(self.row)
+
+            self.sliderRowOn = not self.sliderRowOn
+
+    #changes the rowing servo from input from the rowing slider
+    def rowSliderChanged(self, event):
+        if (  self.gpio.onOffState()  ):
+
+            self.gpio.moveRowServo(self.sliderRow.get())
+
+    #changes the rocking servo from input from the rocking slider
+    def rockSliderChanged(self, event):
+        if (  self.gpio.onOffState()  ):
+
+            self.gpio.moveRockServo(self.sliderRock.get())
+    
+
+GondolaControl()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
